@@ -1,9 +1,13 @@
 from django.db import transaction, IntegrityError
-from core.models import SegmentRule, SegmentRuleCondition
+from django.core.exceptions import PermissionDenied
+from core.models import SegmentRule, SegmentRuleCondition, Segment, UserProfile, Role, OperatorUserMapping
 
 
 PRIORITY_CONFLICT_CODE = 'PRIORITY_CONFLICT'
 PRIORITY_CONFLICT_MESSAGE = 'A rule with this priority already exists.'
+
+PERMISSION_DENIED_CODE = 'PERMISSION_DENIED'
+SEGMENT_NOT_FOUND_CODE = 'SEGMENT_NOT_FOUND'
 
 
 class SegmentRuleService:
@@ -60,3 +64,44 @@ class PriorityConflictError(Exception):
         self.code = PRIORITY_CONFLICT_CODE
         self.message = PRIORITY_CONFLICT_MESSAGE
         super().__init__(self.message)
+
+
+class SegmentUserQueryService:
+    @staticmethod
+    def _resolve_user_role(request_user):
+        if request_user is None or not request_user.is_authenticated:
+            raise PermissionDenied()
+        try:
+            role_obj = request_user.role
+        except Role.DoesNotExist:
+            raise PermissionDenied()
+        return role_obj
+
+    @staticmethod
+    def listUsers(segment_id, request_user):
+        try:
+            segment = Segment.objects.prefetch_related('members').get(pk=segment_id)
+        except Segment.DoesNotExist:
+            return None
+
+        role_obj = SegmentUserQueryService._resolve_user_role(request_user)
+        role_name = role_obj.role
+
+        base_qs = segment.members.all()
+
+        if role_name == Role.ROLE_ADMIN:
+            return base_qs
+
+        if role_name == Role.ROLE_ANALYST:
+            analyst_dept = role_obj.department
+            if analyst_dept is None:
+                return UserProfile.objects.none()
+            return base_qs.filter(department_id=analyst_dept.id, data_scope='dept')
+
+        if role_name == Role.ROLE_OPERATOR:
+            assigned_profile_ids = OperatorUserMapping.objects.filter(
+                operator=request_user
+            ).values_list('user_profile_id', flat=True)
+            return base_qs.filter(pk__in=assigned_profile_ids)
+
+        raise PermissionDenied()

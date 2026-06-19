@@ -1,5 +1,12 @@
 from django.test import TestCase
+from django.contrib.auth.models import User
+from django.core.exceptions import PermissionDenied
 from core.rfm import RFMCalculator, RFMRecord
+from core.models import (
+    Department, Role, OperatorUserMapping,
+    Segment, UserProfile,
+)
+from core.services import SegmentUserQueryService
 
 
 class PercentileRankTests(TestCase):
@@ -196,3 +203,165 @@ class BackwardCompatibilityTests(TestCase):
             if m_perc[i] > edges[0]:
                 self.assertEqual(new_score, old_score,
                     f'User {rec.user_id}: percentile > edges[0] should be unchanged')
+
+
+def _make_user_with_role(username, role_name, department=None):
+    user = User.objects.create_user(username=username, password='pass1234')
+    Role.objects.create(user=user, role=role_name, department=department)
+    return user
+
+
+class SegmentUserQueryServiceScopeTests(TestCase):
+    def setUp(self):
+        self.dept_a = Department.objects.create(name='Dept A')
+        self.dept_b = Department.objects.create(name='Dept B')
+
+        self.admin_user = _make_user_with_role('admin', Role.ROLE_ADMIN)
+        self.analyst_a = _make_user_with_role('analyst_a', Role.ROLE_ANALYST, department=self.dept_a)
+        self.analyst_b = _make_user_with_role('analyst_b', Role.ROLE_ANALYST, department=self.dept_b)
+        self.operator_1 = _make_user_with_role('operator_1', Role.ROLE_OPERATOR, department=self.dept_a)
+        self.operator_2 = _make_user_with_role('operator_2', Role.ROLE_OPERATOR, department=self.dept_b)
+
+        self.profile_a1 = UserProfile.objects.create(
+            name='A1', email='a1@test.com', department=self.dept_a, data_scope='dept',
+            created_by=self.admin_user,
+        )
+        self.profile_a2 = UserProfile.objects.create(
+            name='A2', email='a2@test.com', department=self.dept_a, data_scope='dept',
+            created_by=self.admin_user,
+        )
+        self.profile_b1 = UserProfile.objects.create(
+            name='B1', email='b1@test.com', department=self.dept_b, data_scope='dept',
+            created_by=self.admin_user,
+        )
+        self.profile_b2 = UserProfile.objects.create(
+            name='B2', email='b2@test.com', department=self.dept_b, data_scope='dept',
+            created_by=self.admin_user,
+        )
+        self.profile_other_scope = UserProfile.objects.create(
+            name='O1', email='o1@test.com', department=self.dept_a, data_scope='all',
+            created_by=self.admin_user,
+        )
+
+        self.segment = Segment.objects.create(name='All Users', created_by=self.admin_user)
+        self.segment.members.set([
+            self.profile_a1, self.profile_a2,
+            self.profile_b1, self.profile_b2,
+            self.profile_other_scope,
+        ])
+
+        OperatorUserMapping.objects.create(
+            operator=self.operator_1, user_profile=self.profile_a1,
+        )
+        OperatorUserMapping.objects.create(
+            operator=self.operator_1, user_profile=self.profile_b1,
+        )
+
+    def test_admin_sees_all_users(self):
+        qs = SegmentUserQueryService.listUsers(self.segment.pk, self.admin_user)
+        self.assertEqual(qs.count(), 5)
+        ids = set(qs.values_list('id', flat=True))
+        expected = {self.profile_a1.id, self.profile_a2.id, self.profile_b1.id, self.profile_b2.id, self.profile_other_scope.id}
+        self.assertEqual(ids, expected)
+
+    def test_analyst_sees_only_own_dept_users_with_dept_scope(self):
+        qs_a = SegmentUserQueryService.listUsers(self.segment.pk, self.analyst_a)
+        ids_a = set(qs_a.values_list('id', flat=True))
+        self.assertEqual(ids_a, {self.profile_a1.id, self.profile_a2.id})
+
+        qs_b = SegmentUserQueryService.listUsers(self.segment.pk, self.analyst_b)
+        ids_b = set(qs_b.values_list('id', flat=True))
+        self.assertEqual(ids_b, {self.profile_b1.id, self.profile_b2.id})
+
+    def test_analyst_cannot_see_other_dept_users(self):
+        qs = SegmentUserQueryService.listUsers(self.segment.pk, self.analyst_a)
+        ids = set(qs.values_list('id', flat=True))
+        self.assertNotIn(self.profile_b1.id, ids)
+        self.assertNotIn(self.profile_b2.id, ids)
+
+    def test_analyst_without_department_sees_nothing(self):
+        no_dept_analyst = _make_user_with_role('analyst_nodept', Role.ROLE_ANALYST, department=None)
+        qs = SegmentUserQueryService.listUsers(self.segment.pk, no_dept_analyst)
+        self.assertEqual(qs.count(), 0)
+
+    def test_operator_sees_only_assigned_users(self):
+        qs = SegmentUserQueryService.listUsers(self.segment.pk, self.operator_1)
+        ids = set(qs.values_list('id', flat=True))
+        self.assertEqual(ids, {self.profile_a1.id, self.profile_b1.id})
+
+    def test_operator_cannot_see_unassigned_users(self):
+        qs = SegmentUserQueryService.listUsers(self.segment.pk, self.operator_2)
+        self.assertEqual(qs.count(), 0)
+
+    def test_unauthenticated_user_denied(self):
+        class AnonUser:
+            is_authenticated = False
+        with self.assertRaises(PermissionDenied):
+            SegmentUserQueryService.listUsers(self.segment.pk, AnonUser())
+
+    def test_user_without_role_denied(self):
+        no_role_user = User.objects.create_user(username='norole', password='pass1234')
+        with self.assertRaises(PermissionDenied):
+            SegmentUserQueryService.listUsers(self.segment.pk, no_role_user)
+
+    def test_nonexistent_segment_returns_none(self):
+        qs = SegmentUserQueryService.listUsers(99999, self.admin_user)
+        self.assertIsNone(qs)
+
+
+class SegmentUserQueryServiceSecurityTests(TestCase):
+    def setUp(self):
+        self.dept_a = Department.objects.create(name='Dept A')
+        self.dept_b = Department.objects.create(name='Dept B')
+
+        self.analyst_a = _make_user_with_role('analyst_a', Role.ROLE_ANALYST, department=self.dept_a)
+        self.operator_1 = _make_user_with_role('operator_1', Role.ROLE_OPERATOR, department=self.dept_a)
+
+        self.profile_a1 = UserProfile.objects.create(
+            name='A1', email='a1@test.com', department=self.dept_a, data_scope='dept',
+            created_by=self.analyst_a,
+        )
+        self.profile_b1 = UserProfile.objects.create(
+            name='B1', email='b1@test.com', department=self.dept_b, data_scope='dept',
+            created_by=self.analyst_a,
+        )
+
+        self.segment = Segment.objects.create(name='Seg', created_by=self.analyst_a)
+        self.segment.members.set([self.profile_a1, self.profile_b1])
+
+    def test_analyst_scope_not_bypassable_via_caller_parameters(self):
+        import inspect
+        sig = inspect.signature(SegmentUserQueryService.listUsers)
+        param_names = list(sig.parameters.keys())
+        self.assertIn('request_user', param_names)
+        self.assertNotIn('role', param_names)
+        self.assertNotIn('department', param_names)
+        self.assertNotIn('dept_id', param_names)
+        self.assertNotIn('scope', param_names)
+        self.assertNotIn('user_ids', param_names)
+        self.assertNotIn('data_scope', param_names)
+
+    def test_analyst_scope_is_derived_from_request_user_not_caller_data(self):
+        class FakeUser:
+            is_authenticated = True
+
+            @property
+            def role(self):
+                fake_dept = Department.objects.get(id=self.dept_b.id)
+                r = Role(user=self, role=Role.ROLE_ANALYST, department=fake_dept)
+                return r
+        FakeUser.dept_b = self.dept_b
+
+        qs = SegmentUserQueryService.listUsers(self.segment.pk, self.analyst_a)
+        ids = set(qs.values_list('id', flat=True))
+        self.assertEqual(ids, {self.profile_a1.id})
+        self.assertNotIn(self.profile_b1.id, ids)
+
+    def test_operator_scope_strictly_from_mapping_table(self):
+        OperatorUserMapping.objects.filter(operator=self.operator_1).delete()
+        qs_empty = SegmentUserQueryService.listUsers(self.segment.pk, self.operator_1)
+        self.assertEqual(qs_empty.count(), 0)
+
+        OperatorUserMapping.objects.create(operator=self.operator_1, user_profile=self.profile_b1)
+        qs_one = SegmentUserQueryService.listUsers(self.segment.pk, self.operator_1)
+        self.assertEqual(set(qs_one.values_list('id', flat=True)), {self.profile_b1.id})

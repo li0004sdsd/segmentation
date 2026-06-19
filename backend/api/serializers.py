@@ -1,6 +1,9 @@
 from django.contrib.auth.models import User
 from rest_framework import serializers
-from core.models import Tag, UserProfile, SegmentationRule, SegmentationResult, SegmentRule, SegmentRuleCondition
+from core.models import (
+    Tag, UserProfile, SegmentationRule, SegmentationResult,
+    SegmentRule, SegmentRuleCondition, Segment,
+)
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -77,3 +80,10 @@ class SegmentationResultSerializer(serializers.ModelSerializer):
         model = SegmentationResult
         fields = ('id', 'rule', 'matched_profiles', 'matched_count', 'ran_by', 'ran_at')
         read_only_fields = ('id', 'rule', 'matched_profiles', 'matched_count', 'ran_by', 'ran_at')
+
+
+class SegmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Segment
+        fields = ('id', 'name', 'description', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')

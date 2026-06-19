@@ -5,6 +5,7 @@ from api.views.tags import TagListCreateView, TagDetailView
 from api.views.profiles import ProfileListCreateView, ProfileDetailView, ProfileTagView, ProfileTagDeleteView
 from api.views.rules import RuleListCreateView, RuleDetailView, RuleRunView, SegmentRuleListView, SegmentRuleDetailView
 from api.views.results import ResultListView, ResultDetailView
+from api.views.segments import SegmentListCreateView, SegmentDetailView, UserSegmentController
 
 urlpatterns = [
     path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -25,6 +26,10 @@ urlpatterns = [
 
     path('segment-rules/', SegmentRuleListView.as_view(), name='segment-rule-list'),
     path('segment-rules/<int:pk>/', SegmentRuleDetailView.as_view(), name='segment-rule-detail'),
+
+    path('segments/', SegmentListCreateView.as_view(), name='segment-list'),
+    path('segments/<int:pk>/', SegmentDetailView.as_view(), name='segment-detail'),
+    path('segments/<int:segmentId>/users/', UserSegmentController.as_view(), name='segment-users'),
 
     path('results/', ResultListView.as_view(), name='result-list'),
     path('results/<int:pk>/', ResultDetailView.as_view(), name='result-detail'),
