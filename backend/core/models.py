@@ -34,6 +34,47 @@ class UserProfile(models.Model):
         return self.name
 
 
+class SegmentRule(models.Model):
+    rule_id = models.CharField(max_length=100, unique=True)
+    rule_name = models.CharField(max_length=200)
+    conditions = models.JSONField(default=dict)
+    priority = models.PositiveIntegerField(unique=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='segment_rules')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'segment_rules'
+        ordering = ['priority']
+
+    def __str__(self):
+        return self.rule_name
+
+
+class SegmentRuleCondition(models.Model):
+    CONDITION_TYPE_CHOICES = [
+        ('age', 'Age'),
+        ('gender', 'Gender'),
+        ('city', 'City'),
+        ('country', 'Country'),
+        ('tag', 'Tag'),
+        ('custom', 'Custom'),
+    ]
+
+    rule = models.ForeignKey(SegmentRule, on_delete=models.CASCADE, related_name='segment_rule_conditions')
+    field = models.CharField(max_length=100)
+    operator = models.CharField(max_length=50)
+    value = models.JSONField(default=dict)
+    condition_type = models.CharField(max_length=20, choices=CONDITION_TYPE_CHOICES, default='custom')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'segment_rule_conditions'
+
+    def __str__(self):
+        return f"{self.rule.rule_name} - {self.field} {self.operator}"
+
+
 class SegmentationRule(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)

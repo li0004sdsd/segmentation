@@ -1,6 +1,6 @@
 from django.contrib.auth.models import User
 from rest_framework import serializers
-from core.models import Tag, UserProfile, SegmentationRule, SegmentationResult
+from core.models import Tag, UserProfile, SegmentationRule, SegmentationResult, SegmentRule, SegmentRuleCondition
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -38,6 +38,28 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'tags', 'tag_ids', 'created_by', 'created_at', 'updated_at',
         )
         read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+
+
+class SegmentRuleConditionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SegmentRuleCondition
+        fields = ('id', 'field', 'operator', 'value', 'condition_type', 'created_at')
+        read_only_fields = ('id', 'created_at')
+
+
+class SegmentRuleSerializer(serializers.ModelSerializer):
+    segment_rule_conditions = SegmentRuleConditionSerializer(many=True, required=False)
+
+    class Meta:
+        model = SegmentRule
+        fields = ('id', 'rule_id', 'rule_name', 'conditions', 'priority',
+                  'segment_rule_conditions', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+
+    def validate_priority(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('Priority must be a non-negative integer.')
+        return value
 
 
 class SegmentationRuleSerializer(serializers.ModelSerializer):
